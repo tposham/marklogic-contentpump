@@ -35,6 +35,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.LocalFileSystem;
 
 import com.marklogic.mapreduce.InternalConstants;
+import com.marklogic.mapreduce.utilities.URIUtil;
 
 /**
  * Archive for export, create zip file(s).
@@ -132,7 +133,11 @@ public class OutputArchive implements InternalConstants {
     public void write(String uri, InputStream is, long size, 
             boolean isExportDoc) 
     throws IOException {
-        ZipEntry entry = new ZipEntry(uri);
+        // Sanitize the entry name so a document URI containing ".."
+        // segments cannot write outside the archive root when it is
+        // later extracted ("zip slip", CWE-22).
+        String safeName = URIUtil.sanitizeZipEntryName(uri);
+        ZipEntry entry = new ZipEntry(safeName);
         if (outputStream == null) {
             newOutputStream();
         } else if ((currentFileBytes + size > Integer.MAX_VALUE) &&
@@ -179,7 +184,11 @@ public class OutputArchive implements InternalConstants {
         }
 
         long total = bytes.length;
-        ZipEntry entry = new ZipEntry(outputPath);
+        // Sanitize the entry name so a document URI containing ".."
+        // segments cannot write outside the archive root when it is
+        // later extracted ("zip slip", CWE-22).
+        String safeOutputPath = URIUtil.sanitizeZipEntryName(outputPath);
+        ZipEntry entry = new ZipEntry(safeOutputPath);
 
         if (outputStream == null) {
             newOutputStream();

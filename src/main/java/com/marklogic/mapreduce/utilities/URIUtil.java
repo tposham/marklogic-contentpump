@@ -15,7 +15,10 @@
  */
 package com.marklogic.mapreduce.utilities;
 
+import java.io.IOException;
 import java.net.URI;
+import java.util.ArrayDeque;
+import java.util.Deque;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -98,5 +101,116 @@ public class URIUtil implements MarkLogicConstants {
             LOG.warn("Error parsing URI " + uriStr + ".");
             return uriStr;
         }
+    }
+
+    /**
+     * Resolve a document-URI-derived child path against a concrete base
+     * output directory (e.g. -output_file_path), and verify that the
+     * result does not escape that directory. Protects against path
+     * traversal (CWE-22) when a document URI contains ".." segments.
+     * <p>
+     * Normalization is purely lexical (string-based collapsing of "."
+     * and ".." segments), with no filesystem I/O. This makes it safe and
+     * correct to use for both local filesystem paths and distributed
+     * filesystem paths (e.g. HDFS), since it never needs the path to
+     * actually exist and never follows symlinks.
+     *
+     * @param baseDir concrete, non-root base output directory, using '/'
+     *                as path separator
+     * @param childPath path derived from a document URI; may be absolute
+     *                  (leading '/') or relative, and may contain ".."
+     *                  segments
+     * @return the normalized, safe absolute path string; always equal to
+     *         or nested under the normalized form of baseDir
+     * @throws IOException if the resolved path would escape baseDir
+     */
+    public static String resolveContainedPath(String baseDir,
+            String childPath) throws IOException {
+        String normalizedBase = normalizeSlashPath(baseDir);
+        String combined = (childPath.length() > 0 && childPath.charAt(0) == '/') ?
+                normalizedBase + childPath : normalizedBase + "/" + childPath;
+        String normalized = normalizeSlashPath(combined);
+        if (!normalized.equals(normalizedBase) &&
+                !normalized.startsWith(normalizedBase + "/")) {
+            throw new IOException("Document URI resolves outside of " +
+                "output path \"" + baseDir + "\": " + childPath);
+        }
+        return normalized;
+    }
+
+    /**
+     * Convert a document URI's path into a name safe to use as a
+     * ZipEntry in an archive output, rejecting any URI whose path would
+     * resolve above the archive's own root once ".." segments are
+     * applied (a.k.a. "zip slip", CWE-22). Unlike
+     * {@link #resolveContainedPath(String, String)}, there is no real
+     * base directory to canonicalize against at archive-write time, so
+     * any attempt to walk above the archive root is rejected outright
+     * rather than clamped.
+     *
+     * @param uri raw document URI string, as would otherwise be used
+     *            directly as a ZipEntry name
+     * @return a normalized, traversal-safe, '/'-relative entry name
+     *         (no leading '/', no ".." components)
+     * @throws IOException if the URI would resolve above the archive root
+     */
+    public static String sanitizeZipEntryName(String uri) throws IOException {
+        String[] parts = uri.split("/");
+        Deque<String> stack = new ArrayDeque<String>();
+        for (String part : parts) {
+            if (part.isEmpty() || ".".equals(part)) {
+                continue;
+            } else if ("..".equals(part)) {
+                if (stack.isEmpty()) {
+                    throw new IOException("Document URI would escape the " +
+                        "archive root: " + uri);
+                }
+                stack.removeLast();
+            } else {
+                stack.addLast(part);
+            }
+        }
+        return join(stack);
+    }
+
+    /**
+     * Lexically normalize a '/'-separated path, collapsing "." and ".."
+     * segments. A ".." that would walk above the root of an absolute
+     * path (or above the first segment of a relative path) simply has
+     * no effect, pinning the result at the root instead of escaping it,
+     * which gives callers a stable, always-rooted string to compare
+     * against. No filesystem I/O is performed and the path need not
+     * exist.
+     */
+    private static String normalizeSlashPath(String path) {
+        boolean absolute = path.length() > 0 && path.charAt(0) == '/';
+        String[] parts = path.split("/");
+        Deque<String> stack = new ArrayDeque<String>();
+        for (String part : parts) {
+            if (part.isEmpty() || ".".equals(part)) {
+                continue;
+            } else if ("..".equals(part)) {
+                if (!stack.isEmpty()) {
+                    stack.removeLast();
+                }
+            } else {
+                stack.addLast(part);
+            }
+        }
+        String joined = join(stack);
+        return absolute ? "/" + joined : joined;
+    }
+
+    private static String join(Deque<String> stack) {
+        StringBuilder sb = new StringBuilder();
+        boolean first = true;
+        for (String part : stack) {
+            if (!first) {
+                sb.append('/');
+            }
+            sb.append(part);
+            first = false;
+        }
+        return sb.toString();
     }
 }

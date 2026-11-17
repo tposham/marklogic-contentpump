@@ -21,7 +21,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.URI;
 import java.nio.charset.Charset;
 
 import org.apache.commons.logging.Log;
@@ -76,13 +75,19 @@ implements MarkLogicConstants, ConfigConstants, InternalConstants {
         OutputStream os = null;
         try {
             String childPath = URIUtil.getPathFromURI(uri);
-            Path path;
-            if (childPath.charAt(0) == '/') {
-                // concatenate outputPath with path to form the path
-                path = new Path(dir.toString() + childPath);
-            } else {
-                path = new Path(dir, childPath);
+            String containedPath;
+            try {
+                containedPath = URIUtil.resolveContainedPath(
+                        dir.toString(), childPath);
+            } catch (IOException e) {
+                // Document URI contains ".." (or similar) segments that
+                // would write outside of -output_file_path. Skip this
+                // document rather than failing the whole job; see
+                // CWE-22 path traversal fix.
+                LOG.error("Skipping " + uri + ": " + e.getMessage());
+                return;
             }
+            Path path = new Path(containedPath);
             FileSystem fs = path.getFileSystem(conf);
             if (fs instanceof LocalFileSystem) {
                 File f = new File(path.toUri().getPath());
@@ -162,22 +167,5 @@ implements MarkLogicConstants, ConfigConstants, InternalConstants {
                 os.close();
             }
         }      
-    }
-    
-    protected static String getPathFromURI(DocumentURI uri)  {
-        String uriStr = uri.getUri();
-        try {
-            URI child = new URI(uriStr);
-            String childPath;
-            if (child.isOpaque()) {
-                childPath = child.getSchemeSpecificPart();
-            } else {
-                childPath = child.getPath();
-            }
-            return childPath;
-        } catch (Exception ex) {
-            LOG.error("Error parsing URI " + uriStr + ".");
-            return uriStr;
-        }
     }
 }

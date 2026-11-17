@@ -124,6 +124,15 @@ implements MarkLogicConstants, ConfigConstants {
             }
             return;
         }
+        try {
+            // Validate once, up front, for the whole document: reject
+            // URIs that would resolve above the archive root ("zip
+            // slip", CWE-22) before any partial entry is written for it.
+            URIUtil.sanitizeZipEntryName(zipEntryName);
+        } catch (IOException e) {
+            LOG.error("Skipping " + uri + ": " + e.getMessage());
+            return;
+        }
         if (ContentType.BINARY.equals(type)) {
             if (binaryArchive == null) {
                 binaryArchive = new OutputArchive(dst, conf);
